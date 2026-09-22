@@ -6,13 +6,18 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { nitro } from "nitro/vite";
+
 // @ts-expect-error JS plugin alongside the TS vite config
 import { grokPwaPlugin } from "./scripts/grok-pwa-plugin.mjs";
+
 // @ts-expect-error JS plugin alongside the TS vite config
 import { appEnvPlugin } from "./scripts/app-env-plugin.mjs";
+
 import { isMigrationFile } from "./scripts/migration-plan.mjs";
 
-/** The files `src/lib/db.ts` globs — same directory, same non-recursive scope. */
+/**
+ * Check whether there are database migration files.
+ */
 function hasGlobbedMigrations(root: string): boolean {
   try {
     return readdirSync(join(root, "migrations")).some(isMigrationFile);
@@ -22,23 +27,22 @@ function hasGlobbedMigrations(root: string): boolean {
 }
 
 /**
- * Finish PGLite bootstrap during dev-server setup (before traffic). Vite awaits
- * async `configureServer` hooks. Production: `src/lib/db` kicks `ensureDbReady`
- * on import.
- *
- * Vite awaiting the hook puts this on time-to-first-render, so an app with no
- * migrations — no schema to apply — skips it entirely rather than paying for a
- * PGLite instance it never queries.
+ * Bootstrap PGLite during development.
  */
 function pgliteBootstrapPlugin(): Plugin {
   return {
     name: "app-builder:pglite-bootstrap",
     apply: "serve",
+
     async configureServer(server) {
-      if (!hasGlobbedMigrations(server.config.root)) return;
+      if (!hasGlobbedMigrations(server.config.root)) {
+        return;
+      }
 
       try {
-        const mod = (await server.ssrLoadModule("/src/lib/db.ts")) as {
+        const mod = (await server.ssrLoadModule(
+          "/src/lib/db.ts",
+        )) as {
           ensureDbReady?: () => Promise<void>;
         };
 
@@ -46,7 +50,11 @@ function pgliteBootstrapPlugin(): Plugin {
           await mod.ensureDbReady();
         }
       } catch (err) {
-        console.error("[app-builder] DB bootstrap failed:", err);
+        console.error(
+          "[app-builder] DB bootstrap failed:",
+          err,
+        );
+
         throw err;
       }
     },
@@ -54,11 +62,7 @@ function pgliteBootstrapPlugin(): Plugin {
 }
 
 /**
- * Live-preview OAuth popup — handled HERE so the agent never has to create a
- * `/auth/popup` route.
- *
- * `signIn` (client.ts) opens `/auth/popup?providerId=…` in a top-level window.
- * This middleware runs before TanStack Start.
+ * Development OAuth popup handler.
  */
 function authPopupPlugin(): Plugin {
   return {
@@ -66,189 +70,236 @@ function authPopupPlugin(): Plugin {
     apply: "serve",
 
     configureServer(server) {
-      server.middlewares.use(async (req, res, next) => {
-        try {
-          const rawUrl = req.url ?? "";
-          const pathOnly = rawUrl.split("?", 1)[0] ?? "";
+      server.middlewares.use(
+        async (req, res, next) => {
+          try {
+            const rawUrl = req.url ?? "";
+            const pathOnly =
+              rawUrl.split("?", 1)[0] ?? "";
 
-          if (pathOnly !== "/auth/popup") {
-            next();
-            return;
-          }
+            if (pathOnly !== "/auth/popup") {
+              next();
+              return;
+            }
 
-          if ((req.method ?? "GET").toUpperCase() !== "GET") {
-            res.statusCode = 405;
-            res.setHeader(
-              "content-type",
-              "text/plain; charset=utf-8",
+            if (
+              (req.method ?? "GET").toUpperCase() !==
+              "GET"
+            ) {
+              res.statusCode = 405;
+              res.setHeader(
+                "content-type",
+                "text/plain; charset=utf-8",
+              );
+              res.end("Method Not Allowed");
+              return;
+            }
+
+            const host = String(
+              req.headers["x-forwarded-host"] ??
+                req.headers.host ??
+                "localhost:8080",
             );
-            res.end("Method Not Allowed");
-            return;
-          }
 
-          const host = String(
-            req.headers["x-forwarded-host"] ??
-              req.headers.host ??
-              "localhost:8080",
-          );
-
-          const proto = String(
-            req.headers["x-forwarded-proto"] ??
-              ((req.socket as { encrypted?: boolean } | undefined)
-                ?.encrypted
+            const proto = String(
+              req.headers["x-forwarded-proto"] ??
+                (
+                  req.socket as
+                    | { encrypted?: boolean }
+                    | undefined
+                )?.encrypted
                 ? "https"
-                : "http"),
-          );
+                : "http",
+            );
 
-          const requestHeaders = new Headers();
+            const requestHeaders = new Headers();
 
-          for (const [key, value] of Object.entries(req.headers)) {
-            if (value === undefined) continue;
-
-            if (Array.isArray(value)) {
-              for (const v of value) {
-                requestHeaders.append(key, v);
+            for (const [key, value] of Object.entries(
+              req.headers,
+            )) {
+              if (value === undefined) {
+                continue;
               }
-            } else {
-              requestHeaders.set(key, value);
+
+              if (Array.isArray(value)) {
+                for (const v of value) {
+                  requestHeaders.append(key, v);
+                }
+              } else {
+                requestHeaders.set(key, value);
+              }
+            }
+
+            if (!requestHeaders.has("host")) {
+              requestHeaders.set("host", host);
+            }
+
+            const request = new Request(
+              `${proto}://${host}${rawUrl}`,
+              {
+                method: "GET",
+                headers: requestHeaders,
+              },
+            );
+
+            const mod =
+              (await server.ssrLoadModule(
+                "/src/lib/auth/popup.server.ts",
+              )) as {
+                handleAuthPopupRequest: (
+                  req: Request,
+                ) => Promise<Response>;
+              };
+
+            const response =
+              await mod.handleAuthPopupRequest(request);
+
+            res.statusCode = response.status;
+
+            const setCookies =
+              typeof response.headers.getSetCookie ===
+              "function"
+                ? response.headers.getSetCookie()
+                : [];
+
+            response.headers.forEach((value, key) => {
+              if (
+                key.toLowerCase() === "set-cookie"
+              ) {
+                return;
+              }
+
+              res.setHeader(key, value);
+            });
+
+            for (const cookie of setCookies) {
+              res.appendHeader(
+                "set-cookie",
+                cookie,
+              );
+            }
+
+            const body = Buffer.from(
+              await response.arrayBuffer(),
+            );
+
+            res.end(body);
+          } catch (err) {
+            console.error(
+              "[app-builder] /auth/popup handler failed:",
+              err,
+            );
+
+            if (!res.headersSent) {
+              res.statusCode = 500;
+
+              res.setHeader(
+                "content-type",
+                "text/plain; charset=utf-8",
+              );
+
+              res.end("auth popup failed");
             }
           }
-
-          // Ensure Host is the public preview host so Better Auth's
-          // dynamic baseURL / redirect_uri match the popup origin.
-          if (!requestHeaders.has("host")) {
-            requestHeaders.set("host", host);
-          }
-
-          const request = new Request(
-            `${proto}://${host}${rawUrl}`,
-            {
-              method: "GET",
-              headers: requestHeaders,
-            },
-          );
-
-          const mod =
-            (await server.ssrLoadModule(
-              "/src/lib/auth/popup.server.ts",
-            )) as {
-              handleAuthPopupRequest: (
-                req: Request,
-              ) => Promise<Response>;
-            };
-
-          const response =
-            await mod.handleAuthPopupRequest(request);
-
-          res.statusCode = response.status;
-
-          // Preserve multiple Set-Cookie headers.
-          const setCookies =
-            typeof response.headers.getSetCookie === "function"
-              ? response.headers.getSetCookie()
-              : [];
-
-          response.headers.forEach((value, key) => {
-            if (key.toLowerCase() === "set-cookie") return;
-            res.setHeader(key, value);
-          });
-
-          for (const cookie of setCookies) {
-            res.appendHeader("set-cookie", cookie);
-          }
-
-          const body = Buffer.from(
-            await response.arrayBuffer(),
-          );
-
-          res.end(body);
-        } catch (err) {
-          console.error(
-            "[app-builder] /auth/popup handler failed:",
-            err,
-          );
-
-          if (!res.headersSent) {
-            res.statusCode = 500;
-            res.setHeader(
-              "content-type",
-              "text/plain; charset=utf-8",
-            );
-            res.end("auth popup failed");
-          }
-        }
-      });
+        },
+      );
     },
   };
 }
 
-// `0.0.0.0:8080` is the live-preview contract — don't change host/port.
-export default defineConfig(({ command, isPreview }) => ({
-  base: process.env.VITE_BASE_PATH || "/",
+export default defineConfig(
+  ({ command, isPreview }) => {
+    const githubPages =
+      process.env.GITHUB_PAGES === "true";
 
-  server: {
-    host: "0.0.0.0",
-    port: 8080,
-    strictPort: true,
+    return {
+      base:
+        process.env.VITE_BASE_PATH || "/",
+
+      server: {
+        host: "0.0.0.0",
+        port: 8080,
+        strictPort: true,
+      },
+
+      preview: {
+        host: "127.0.0.1",
+        port: 8081,
+        strictPort: true,
+      },
+
+      resolve: {
+        tsconfigPaths: true,
+      },
+
+      plugins: [
+        pgliteBootstrapPlugin(),
+
+        // Must run before TanStack Start.
+        authPopupPlugin(),
+
+        // Development environment variables.
+        appEnvPlugin(),
+
+        // PWA / install-page handling.
+        grokPwaPlugin(),
+
+        tailwindcss(),
+
+        /*
+         * IMPORTANT:
+         *
+         * GitHub Pages needs a real static index.html.
+         *
+         * Enable TanStack Start prerendering for the root route.
+         */
+        tanstackStart({
+          prerender: githubPages
+            ? {
+                enabled: true,
+                crawlLinks: false,
+                routes: ["/"],
+              }
+            : undefined,
+        }),
+
+        /*
+         * Nitro MUST remain enabled.
+         *
+         * The previous configuration removed Nitro for GitHub Pages,
+         * which caused the build to produce:
+         *
+         *   dist/server/...
+         *
+         * but no:
+         *
+         *   index.html
+         *
+         * Restore the static Nitro preset here.
+         */
+        ...(command === "build" || isPreview
+          ? [
+              nitro({
+                preset: githubPages
+                  ? "static"
+                  : "vercel",
+
+                serverDir: "./server",
+
+                ...(githubPages
+                  ? {
+                      prerender: {
+                        routes: ["/"],
+                        crawlLinks: false,
+                      },
+                    }
+                  : {}),
+              }),
+            ]
+          : []),
+
+        viteReact(),
+      ],
+    };
   },
-
-  preview: {
-    host: "127.0.0.1",
-    port: 8081,
-    strictPort: true,
-  },
-
-  resolve: {
-    tsconfigPaths: true,
-  },
-
-  plugins: [
-    pgliteBootstrapPlugin(),
-
-    // Before tanstackStart so /auth/popup never falls through to the SPA.
-    authPopupPlugin(),
-
-    // Dev-only /__app-env.
-    appEnvPlugin(),
-
-    // PWA head + ?install=1 tutorial page.
-    grokPwaPlugin(),
-
-    tailwindcss(),
-
-    tanstackStart(),
-
-    /*
-     * IMPORTANT:
-     *
-     * GitHub Pages is a static deployment.
-     *
-     * The previous configuration started Nitro during the GitHub Pages
-     * build. Nitro then attempted to load:
-     *
-     *   scripts/install-page.html?raw
-     *
-     * and the GitHub Actions build failed with:
-     *
-     *   [UNLOADABLE_DEPENDENCY]
-     *
-     * Therefore Nitro is deliberately skipped for GitHub Pages.
-     *
-     * Nitro is still used for normal non-GitHub-Pages builds.
-     */
-    ...(command === "build" || isPreview
-      ? [
-          ...(process.env.GITHUB_PAGES === "true"
-            ? []
-            : [
-                nitro({
-                  preset: "vercel",
-                  serverDir: "./server",
-                }),
-              ]),
-        ]
-      : []),
-
-    viteReact(),
-  ],
-}));
+);
