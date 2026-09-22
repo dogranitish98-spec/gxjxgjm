@@ -1,0 +1,48 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# build output / caches
+dist/
+.output/
+.vinxi/
+.tanstack/
+.vercel/
+.nitro/
+.cache/
+*.local
+
+# env / secrets (keep the template)
+.env
+.env.*
+!.env.example
+
+# Grok App Builder workspace state (app-env.json is the only tracked file)
+.grok/*
+!.grok/app-env.json
+.node_modules.lock
+.project_id
+artifacts/
+attachments/
+
+# logs / OS
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
+
+# test / coverage
+coverage/
+*.lcov
+
+# editor
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# local DB / data
+*.db
+*.sqlite
+pglite-data/
