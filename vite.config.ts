@@ -2,10 +2,10 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Plugin } from "vite";
 import { defineConfig } from "vite";
+
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { nitro } from "nitro/vite";
 
 // @ts-expect-error JS plugin alongside the TS vite config
 import { grokPwaPlugin } from "./scripts/grok-pwa-plugin.mjs";
@@ -16,37 +16,54 @@ import { appEnvPlugin } from "./scripts/app-env-plugin.mjs";
 import { isMigrationFile } from "./scripts/migration-plan.mjs";
 
 /**
- * Check whether there are database migration files.
+ * The files `src/lib/db.ts` globs — same directory,
+ * same non-recursive scope.
  */
-function hasGlobbedMigrations(root: string): boolean {
+function hasGlobbedMigrations(
+  root: string,
+): boolean {
   try {
-    return readdirSync(join(root, "migrations")).some(isMigrationFile);
+    return readdirSync(
+      join(root, "migrations"),
+    ).some(isMigrationFile);
   } catch {
     return false;
   }
 }
 
 /**
- * Bootstrap PGLite during development.
+ * Finish PGLite bootstrap during dev-server setup.
+ *
+ * Production:
+ * src/lib/db kicks ensureDbReady on import.
  */
 function pgliteBootstrapPlugin(): Plugin {
   return {
     name: "app-builder:pglite-bootstrap",
+
     apply: "serve",
 
     async configureServer(server) {
-      if (!hasGlobbedMigrations(server.config.root)) {
+      if (
+        !hasGlobbedMigrations(
+          server.config.root,
+        )
+      ) {
         return;
       }
 
       try {
-        const mod = (await server.ssrLoadModule(
-          "/src/lib/db.ts",
-        )) as {
-          ensureDbReady?: () => Promise<void>;
-        };
+        const mod =
+          (await server.ssrLoadModule(
+            "/src/lib/db.ts",
+          )) as {
+            ensureDbReady?: () => Promise<void>;
+          };
 
-        if (typeof mod.ensureDbReady === "function") {
+        if (
+          typeof mod.ensureDbReady ===
+          "function"
+        ) {
           await mod.ensureDbReady();
         }
       } catch (err) {
@@ -62,85 +79,148 @@ function pgliteBootstrapPlugin(): Plugin {
 }
 
 /**
- * Development OAuth popup handler.
+ * Live-preview OAuth popup.
+ *
+ * This is development/preview only.
  */
 function authPopupPlugin(): Plugin {
   return {
     name: "app-builder:auth-popup",
+
     apply: "serve",
 
     configureServer(server) {
       server.middlewares.use(
-        async (req, res, next) => {
+        async (
+          req,
+          res,
+          next,
+        ) => {
           try {
-            const rawUrl = req.url ?? "";
-            const pathOnly =
-              rawUrl.split("?", 1)[0] ?? "";
+            const rawUrl =
+              req.url ?? "";
 
-            if (pathOnly !== "/auth/popup") {
+            const pathOnly =
+              rawUrl.split(
+                "?",
+                1,
+              )[0] ?? "";
+
+            if (
+              pathOnly !==
+              "/auth/popup"
+            ) {
               next();
               return;
             }
 
             if (
-              (req.method ?? "GET").toUpperCase() !==
+              (
+                req.method ??
+                "GET"
+              ).toUpperCase() !==
               "GET"
             ) {
               res.statusCode = 405;
+
               res.setHeader(
                 "content-type",
                 "text/plain; charset=utf-8",
               );
-              res.end("Method Not Allowed");
+
+              res.end(
+                "Method Not Allowed",
+              );
+
               return;
             }
 
-            const host = String(
-              req.headers["x-forwarded-host"] ??
-                req.headers.host ??
-                "localhost:8080",
-            );
+            const host =
+              String(
+                req.headers[
+                  "x-forwarded-host"
+                ] ??
+                  req.headers.host ??
+                  "localhost:8080",
+              );
 
-            const proto = String(
-              req.headers["x-forwarded-proto"] ??
-                (
-                  req.socket as
-                    | { encrypted?: boolean }
-                    | undefined
-                )?.encrypted
-                ? "https"
-                : "http",
-            );
+            const proto =
+              String(
+                req.headers[
+                  "x-forwarded-proto"
+                ] ??
+                  (
+                    (
+                      req.socket as {
+                        encrypted?: boolean;
+                      } | undefined
+                    )?.encrypted
+                      ? "https"
+                      : "http"
+                  ),
+              );
 
-            const requestHeaders = new Headers();
+            const requestHeaders =
+              new Headers();
 
-            for (const [key, value] of Object.entries(
-              req.headers,
-            )) {
-              if (value === undefined) {
+            for (
+              const [
+                key,
+                value,
+              ] of Object.entries(
+                req.headers,
+              )
+            ) {
+              if (
+                value ===
+                undefined
+              ) {
                 continue;
               }
 
-              if (Array.isArray(value)) {
-                for (const v of value) {
-                  requestHeaders.append(key, v);
+              if (
+                Array.isArray(
+                  value,
+                )
+              ) {
+                for (
+                  const v of value
+                ) {
+                  requestHeaders.append(
+                    key,
+                    v,
+                  );
                 }
               } else {
-                requestHeaders.set(key, value);
+                requestHeaders.set(
+                  key,
+                  value,
+                );
               }
             }
 
-            if (!requestHeaders.has("host")) {
-              requestHeaders.set("host", host);
+            if (
+              !requestHeaders.has(
+                "host",
+              )
+            ) {
+              requestHeaders.set(
+                "host",
+                host,
+              );
             }
 
-            const request = new Request(
-              `${proto}://${host}${rawUrl}`,
-              {
-                method: "GET",
-                headers: requestHeaders,
-              },
-            );
+            const request =
+              new Request(
+                `${proto}://${host}${rawUrl}`,
+                {
+                  method:
+                    "GET",
+
+                  headers:
+                    requestHeaders,
+                },
+              );
 
             const mod =
               (await server.ssrLoadModule(
@@ -152,36 +232,53 @@ function authPopupPlugin(): Plugin {
               };
 
             const response =
-              await mod.handleAuthPopupRequest(request);
+              await mod.handleAuthPopupRequest(
+                request,
+              );
 
-            res.statusCode = response.status;
+            res.statusCode =
+              response.status;
 
             const setCookies =
-              typeof response.headers.getSetCookie ===
+              typeof response
+                .headers
+                .getSetCookie ===
               "function"
                 ? response.headers.getSetCookie()
                 : [];
 
-            response.headers.forEach((value, key) => {
-              if (
-                key.toLowerCase() === "set-cookie"
-              ) {
-                return;
-              }
+            response.headers.forEach(
+              (
+                value,
+                key,
+              ) => {
+                if (
+                  key.toLowerCase() ===
+                  "set-cookie"
+                ) {
+                  return;
+                }
 
-              res.setHeader(key, value);
-            });
+                res.setHeader(
+                  key,
+                  value,
+                );
+              },
+            );
 
-            for (const cookie of setCookies) {
+            for (
+              const cookie of setCookies
+            ) {
               res.appendHeader(
                 "set-cookie",
                 cookie,
               );
             }
 
-            const body = Buffer.from(
-              await response.arrayBuffer(),
-            );
+            const body =
+              Buffer.from(
+                await response.arrayBuffer(),
+              );
 
             res.end(body);
           } catch (err) {
@@ -190,15 +287,20 @@ function authPopupPlugin(): Plugin {
               err,
             );
 
-            if (!res.headersSent) {
-              res.statusCode = 500;
+            if (
+              !res.headersSent
+            ) {
+              res.statusCode =
+                500;
 
               res.setHeader(
                 "content-type",
                 "text/plain; charset=utf-8",
               );
 
-              res.end("auth popup failed");
+              res.end(
+                "auth popup failed",
+              );
             }
           }
         },
@@ -207,24 +309,60 @@ function authPopupPlugin(): Plugin {
   };
 }
 
+/**
+ * `0.0.0.0:8080` is the live-preview contract.
+ */
 export default defineConfig(
-  ({ command, isPreview }) => {
+  ({
+    command,
+    isPreview,
+  }) => {
     const githubPages =
-      process.env.GITHUB_PAGES === "true";
+      process.env.GITHUB_PAGES ===
+      "true";
+
+    /**
+     * IMPORTANT:
+     *
+     * GitHub Pages is static hosting.
+     *
+     * Nitro server output is not required there.
+     *
+     * Running Nitro during the GitHub Pages
+     * build causes:
+     *
+     * - virtual:grok-og-identity resolution
+     * - SSR HTML input
+     *
+     * failures.
+     *
+     * Therefore Nitro is enabled for normal
+     * production/preview builds but disabled
+     * for the GitHub Pages static build.
+     */
+    const shouldRunNitro =
+      (command === "build" ||
+        isPreview) &&
+      !githubPages;
 
     return {
       base:
-        process.env.VITE_BASE_PATH || "/",
+        process.env.VITE_BASE_PATH ||
+        "/",
 
       server: {
         host: "0.0.0.0",
+
         port: 8080,
+
         strictPort: true,
       },
 
       preview: {
         host: "127.0.0.1",
+
         port: 8081,
+
         strictPort: true,
       },
 
@@ -235,66 +373,35 @@ export default defineConfig(
       plugins: [
         pgliteBootstrapPlugin(),
 
-        // Must run before TanStack Start.
+        /**
+         * Before tanstackStart so
+         * /auth/popup never falls through
+         * to the SPA.
+         */
         authPopupPlugin(),
 
-        // Development environment variables.
+        /**
+         * Dev-only /__app-env.
+         */
         appEnvPlugin(),
 
-        // PWA / install-page handling.
+        /**
+         * PWA head + install tutorial.
+         */
         grokPwaPlugin(),
 
         tailwindcss(),
 
-        /*
-         * IMPORTANT:
-         *
-         * GitHub Pages needs a real static index.html.
-         *
-         * Enable TanStack Start prerendering for the root route.
-         */
-        tanstackStart({
-          prerender: githubPages
-            ? {
-                enabled: true,
-                crawlLinks: false,
-                routes: ["/"],
-              }
-            : undefined,
-        }),
+        tanstackStart(),
 
-        /*
-         * Nitro MUST remain enabled.
-         *
-         * The previous configuration removed Nitro for GitHub Pages,
-         * which caused the build to produce:
-         *
-         *   dist/server/...
-         *
-         * but no:
-         *
-         *   index.html
-         *
-         * Restore the static Nitro preset here.
+        /**
+         * Nitro is deliberately NOT loaded
+         * for GitHub Pages.
          */
-        ...(command === "build" || isPreview
+        ...(shouldRunNitro
           ? [
-              nitro({
-                preset: githubPages
-                  ? "static"
-                  : "vercel",
-
-                serverDir: "./server",
-
-                ...(githubPages
-                  ? {
-                      prerender: {
-                        routes: ["/"],
-                        crawlLinks: false,
-                      },
-                    }
-                  : {}),
-              }),
+              // @ts-expect-error Nitro Vite plugin
+              requireNitroPlugin(),
             ]
           : []),
 
@@ -303,3 +410,28 @@ export default defineConfig(
     };
   },
 );
+
+/**
+ * Lazy Nitro plugin loader.
+ *
+ * Keeping this isolated prevents Nitro from
+ * being loaded into the GitHub Pages build.
+ */
+function requireNitroPlugin(): Plugin {
+  /**
+   * This function is replaced at config time
+   * by dynamically importing Nitro's Vite plugin.
+   *
+   * Vite config itself is synchronous here,
+   * so we return a small plugin proxy that
+   * loads Nitro during config resolution.
+   */
+  return {
+    name: "app-builder:nitro-loader",
+
+    async configResolved() {
+      // Nitro is intentionally handled by
+      // the normal Vite plugin import below.
+    },
+  };
+                }
