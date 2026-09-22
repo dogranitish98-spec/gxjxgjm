@@ -392,7 +392,26 @@ export default defineConfig(
 
         tailwindcss(),
 
-        tanstackStart(),
+        /**
+         * GitHub Pages has no Node/Nitro server to
+         * render HTML on request, so Start must
+         * prerender routes to static HTML at build
+         * time. This is what actually produces
+         * dist/client/index.html; without it the
+         * client build only contains JS assets.
+         */
+        tanstackStart(
+          githubPages
+            ? {
+                prerender: {
+                  enabled: true,
+                  crawlLinks: true,
+                  autoStaticPathsDiscovery: true,
+                  failOnError: false,
+                },
+              }
+            : {},
+        ),
 
         /**
          * Nitro is deliberately NOT loaded
@@ -434,4 +453,4 @@ function requireNitroPlugin(): Plugin {
       // the normal Vite plugin import below.
     },
   };
-                }
+}
