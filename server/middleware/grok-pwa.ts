@@ -1,20 +1,9 @@
 /**
  * Deployed-app (Nitro) half of the platform PWA chrome.
  *
- * IMPORTANT:
- * The install-page HTML is embedded directly in this file.
- * This avoids Nitro/Rolldown failing to resolve:
- *
- *   scripts/install-page.html?raw
- *
+ * The install-page template is embedded below instead of imported with
+ * `?raw`, because Nitro/Rolldown can fail to resolve HTML raw imports
  * during the GitHub Pages static build.
- *
- * Handles:
- *
- * - ?install=1&platform=ios → Home Screen tutorial
- * - /__grok/manifest.webmanifest → dynamic web manifest
- * - /__grok/manifest.json → dynamic web manifest
- * - Other HTML documents → PWA + OG head injection
  */
 
 import { grokOgIdentity } from "virtual:grok-og-identity";
@@ -37,16 +26,12 @@ interface GrokPwaEvent {
 }
 
 /**
- * Install page template.
+ * The original scripts/install-page.html is embedded directly here.
  *
- * This is intentionally embedded here instead of importing:
- *
- *   ../../scripts/install-page.html?raw
- *
- * because Nitro/Rolldown cannot reliably resolve that raw HTML
- * dependency during the GitHub Pages static build.
+ * Using String.raw preserves the JavaScript regular expressions and
+ * backslashes inside the HTML exactly as written.
  */
-const installPageTemplate = `<!DOCTYPE html>
+const installPageTemplate = String.raw`<!DOCTYPE html>
 <html lang="en" class="device-desktop">
   <head>
     <meta charset="utf-8" />
@@ -73,9 +58,7 @@ const installPageTemplate = `<!DOCTYPE html>
       content="{{APP_NAME}}"
     />
 
-    <title>
-      Add {{APP_NAME}} to your Home Screen
-    </title>
+    <title>Add {{APP_NAME}} to your Home Screen</title>
 
     <link
       rel="manifest"
@@ -158,19 +141,15 @@ const installPageTemplate = `<!DOCTYPE html>
         var safariToken = null;
 
         var iphoneOs =
-          ua.match(
-            /iPhone OS (\\d+)[._]/
-          );
+          ua.match(/iPhone OS (\d+)[._]/);
 
         var ipadOs =
           ua.match(
-            /CPU OS (\\d+)[._](\\d+) like Mac OS X/
+            /CPU OS (\d+)[._](\d+) like Mac OS X/
           );
 
         var safariVer =
-          ua.match(
-            /Version\\/(\\d+)[._]/
-          );
+          ua.match(/Version\/(\d+)[._]/);
 
         if (iphoneOs) {
           osToken =
@@ -215,9 +194,7 @@ const installPageTemplate = `<!DOCTYPE html>
           "device-" + type
         ];
 
-        if (
-          iosMajor != null
-        ) {
+        if (iosMajor != null) {
           root.dataset.ios =
             String(iosMajor);
 
@@ -427,7 +404,7 @@ const installPageTemplate = `<!DOCTYPE html>
 </html>`;
 
 /**
- * Resolve the public request host.
+ * Get the public request host.
  */
 function requestHost(
   event: GrokPwaEvent,
@@ -436,27 +413,29 @@ function requestHost(
     event.req.headers.get(
       "x-forwarded-host",
     ) ??
-    event.req.headers.get("host") ??
+    event.req.headers.get(
+      "host",
+    ) ??
     event.url.host
   );
 }
 
 /**
- * Inject PWA/OG tags into an HTML response.
+ * Inject PWA + OG metadata into an HTML response.
  */
 function injectHeadStreaming(
   response: Response,
   host: string,
 ): Response {
+  if (!response.body) {
+    return response;
+  }
+
   const injector =
     createHeadInjector({
       host,
       site: grokOgIdentity.site,
     });
-
-  if (!response.body) {
-    return response;
-  }
 
   const transformed =
     response.body.pipeThrough(
@@ -511,7 +490,7 @@ function injectHeadStreaming(
 }
 
 /**
- * Main Nitro middleware.
+ * Nitro PWA middleware.
  */
 export default async function grokPwaMiddleware(
   event: GrokPwaEvent,
@@ -563,9 +542,6 @@ export default async function grokPwaMiddleware(
 
   /**
    * PWA install tutorial.
-   *
-   * The template is embedded above, so Nitro no longer
-   * needs to resolve install-page.html?raw.
    */
   if (
     isInstallQuery(
@@ -580,4 +556,65 @@ export default async function grokPwaMiddleware(
   ) {
     const html =
       renderInstallPageHtml(
-       
+        installPageTemplate,
+        {
+          host:
+            requestHost(event),
+
+          url:
+            urlWithQuery,
+        },
+      );
+
+    return new Response(
+      html,
+      {
+        headers: {
+          "content-type":
+            "text/html; charset=utf-8",
+
+          "cache-control":
+            "no-cache",
+        },
+      },
+    );
+  }
+
+  /**
+   * Non-document requests continue normally.
+   */
+  if (
+    !isDocumentPath(path)
+  ) {
+    return next();
+  }
+
+  /**
+   * Let TanStack/Nitro render the document.
+   */
+  const result =
+    await next();
+
+  /**
+   * Inject PWA + OG metadata.
+   */
+  if (
+    result instanceof Response &&
+    result.body &&
+    String(
+      result.headers.get(
+        "content-type",
+      ) ?? "",
+    ).includes("text/html") &&
+    !result.headers.get(
+      "content-encoding",
+    )
+  ) {
+    return injectHeadStreaming(
+      result,
+      requestHost(event),
+    );
+  }
+
+  return result;
+}
