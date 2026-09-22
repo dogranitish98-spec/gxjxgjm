@@ -12,10 +12,19 @@ const result = spawnSync("npx", ["vite", "build"], {
 });
 if (result.status !== 0) process.exit(result.status ?? 1);
 
-const candidates = [join(root, ".output", "public"), join(root, "dist")];
-const source = candidates.find((dir) => existsSync(dir));
+// Vite's environments build (client + ssr) emits dist/client and dist/server,
+// not a flat dist/. Prefer dist/client, and only accept a candidate that
+// actually contains an index.html.
+const candidates = [
+  join(root, ".output", "public"),
+  join(root, "dist", "client"),
+  join(root, "dist"),
+];
+const source = candidates.find((dir) => existsSync(dir) && existsSync(join(dir, "index.html")));
 if (!source) {
-  console.error("GitHub Pages build output was not found (.output/public or dist).");
+  console.error(
+    "GitHub Pages build output was not found (.output/public, dist/client, or dist with an index.html).",
+  );
   process.exit(1);
 }
 
